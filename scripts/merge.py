@@ -3,15 +3,9 @@
 через sing-box, сливает с data/own_domains.lst и data/own_subnets.lst,
 пишет итог в domains.json / subnets.json (source-формат для sing-box compile).
 
-ВАЖНО про размер subnets: помимо попадания в rule_set самого sing-box,
-subnets.srs ЕЩЁ парсится Podkop'ом и КАЖДЫЙ элемент добавляется в nftables-сет
-podkop_subnets (шлюз перехвата пакетов по IP — нужен для прямых IP-подключений
-вроде Telegram MTProto, которые идут в обход DNS/fakeip). На слабом роутере
-десятки тысяч элементов эту операцию не тянут — сет остаётся пустым, и такие
-подключения тихо перестают тоннелироваться. Поэтому в subnets держим только
-itdoginfo-списки + свои — компактно и быстро добавляется в nft. Домены
-ограничения на размер не имеют (fakeip/sniff, не nftables-сет), поэтому туда
-можно смело подмешивать что угодно."""
+Подсети перед записью схлопываются: podkop добавляет каждую строку subnets.srs
+в nftables-сет podkop_subnets построчно, с форком на строку, так что время
+старта роутера линейно зависит от числа строк."""
 import ipaddress
 import json
 import subprocess
@@ -29,10 +23,9 @@ DOMAIN_ONLY_EXTRA_URLS = [
     "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/spotify.srs",
 ]
 
-# подсети — НЕ добавляем сюда всё подряд (google.srs 8k+, all-in-one 20k+
-# записей) — см. пояснение в начале файла. Если понадобится точечно —
-# добавлять руками в data/own_subnets.lst, не сюда.
-SUBNET_ONLY_EXTRA_URLS = []
+SUBNET_ONLY_EXTRA_URLS = [
+    "https://raw.githubusercontent.com/mudachyo/IP-Ranger/main/ip-lists/ALL-IN-ONE/all-in-one.srs",
+]
 
 
 def fetch(url, dest):
@@ -64,6 +57,15 @@ def extract_subnets(json_path, subnets):
                 pass  # битые фрагменты в апстриме — пропускаем
 
 
+def collapse(subnets):
+    out = []
+    for version in (4, 6):
+        nets = [n for n in (ipaddress.ip_network(c) for c in subnets)
+                if n.version == version]
+        out += [str(n) for n in ipaddress.collapse_addresses(nets)]
+    return set(out)
+
+
 def main():
     domains, subnets = set(), set()
 
@@ -88,6 +90,8 @@ def main():
 
     domains.update(l.strip() for l in open("data/own_domains.lst") if l.strip())
     subnets.update(l.strip() for l in open("data/own_subnets.lst") if l.strip())
+
+    subnets = collapse(subnets)
 
     print(f"итого: {len(domains)} доменов, {len(subnets)} подсетей")
 
