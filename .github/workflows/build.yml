@@ -44,3 +44,15 @@ jobs:
           git diff --staged --quiet && exit 0
           git commit -m "Rebuild dist/*.srs [skip ci]"
           git push
+
+      # Роутер качает списки с raw.githubusercontent, а не отсюда: uclient-fetch
+      # в OpenWrt не проходит цепочку редиректов релизных ассетов (см. 6bacfda).
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest \
+            --title "latest" \
+            --notes "Скомпилированные rule-set'ы. Пересобираются автоматически, ассеты перезаписываются на месте."
+          gh release upload latest dist/domains.srs dist/subnets.srs --clobber
+          gh release edit latest --notes "Обновлено: $(date -u '+%Y-%m-%d %H:%M UTC') • $(git rev-parse --short HEAD)"
