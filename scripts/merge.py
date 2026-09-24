@@ -6,6 +6,8 @@
 Подсети перед записью схлопываются: podkop добавляет каждую строку subnets.srs
 в nftables-сет podkop_subnets построчно, с форком на строку, так что время
 старта роутера линейно зависит от числа строк."""
+import os
+import re
 import ipaddress
 import json
 import subprocess
@@ -18,6 +20,38 @@ ITDOG_LISTS = [
 ]
 ITDOG_URL = "https://github.com/itdoginfo/allow-domains/releases/latest/download/{}.srs"
 
+DOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')
+
+
+def read_own_domains(path):
+    out = set()
+    if not os.path.exists(path):
+        return out
+    for n, line in enumerate(open(path), 1):
+        s = line.split("#", 1)[0].strip().lower()
+        if not s:
+            continue
+        if DOMAIN_RE.match(s):
+            out.add(s)
+        else:
+            print(f"::warning::{path}:{n}: пропущена некорректная строка: {line.strip()}")
+    return out
+
+
+def read_own_subnets(path):
+    out = set()
+    if not os.path.exists(path):
+        return out
+    for n, line in enumerate(open(path), 1):
+        s = line.split("#", 1)[0].strip()
+        if not s:
+            continue
+        try:
+            out.add(str(ipaddress.ip_network(s, strict=False)))
+        except ValueError:
+            print(f"::warning::{path}:{n}: пропущена некорректная строка: {line.strip()}")
+    return out
+    
 # домены — сюда можно тащить сколько угодно, ограничений нет
 DOMAIN_ONLY_EXTRA_URLS = [
     "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/spotify.srs",
@@ -125,11 +159,9 @@ def main():
         decompile(srs, js)
         merge(source_label(url), extract_subnets(js), subnets, subnet_report)
 
-    merge("data/own_domains.lst",
-          {l.strip() for l in open("data/own_domains.lst") if l.strip()},
+    merge("data/own_domains.lst", read_own_domains("data/own_domains.lst"),
           domains, domain_report)
-    merge("data/own_subnets.lst",
-          {l.strip() for l in open("data/own_subnets.lst") if l.strip()},
+    merge("data/own_subnets.lst", read_own_subnets("data/own_subnets.lst"),
           subnets, subnet_report)
 
     print_report("ДОМЕНЫ", domain_report, len(domains))
