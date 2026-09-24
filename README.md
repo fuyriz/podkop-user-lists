@@ -16,11 +16,6 @@ hodca, ovh, roblox, russia_inside, telegram, google_play) и `google.srs` от
 ## Использование в Podkop
 
 ```
-remote_domain_lists: https://github.com/<owner>/podkop-user-lists/releases/latest/download/domains.srs
-remote_subnet_lists: https://github.com/<owner>/podkop-user-lists/releases/latest/download/subnets.srs
-```
-
-```
-https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/domains.srs
-https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/subnets.srs
+remote_domain_lists: https://github.com/fuyriz/podkop-user-lists/releases/latest/download/domains.srs
+remote_subnet_lists: https://github.com/fuyriz/podkop-user-lists/releases/latest/download/subnets.srs
 ```
