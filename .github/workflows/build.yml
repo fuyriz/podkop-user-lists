@@ -1,58 +1,52 @@
-name: Build and release rule-sets
+name: Build merged rule-sets
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - "data/**"
-      - "scripts/**"
-      - ".github/workflows/build.yml"
   schedule:
-    - cron: "0 3 * * *"  # ежедневно, подхватывает обновления itdoginfo/MetaCubeX
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install sing-box
+      - name: Install sing-box (только для финальной компиляции)
         run: |
-          curl -fsSL -o sing-box.tar.gz \
-            "https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -oP '"tag_name": "v\K[^"]+')-linux-amd64.tar.gz"
-          tar xzf sing-box.tar.gz
-          sudo mv sing-box-*/sing-box /usr/local/bin/sing-box
-          sing-box version
+          curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-linux-amd64.tar.gz
+          tar -xzf sing-box.tar.gz
+          sudo mv sing-box-1.14.0-linux-amd64/sing-box /usr/local/bin/
 
-      - name: Fetch upstream + merge with own lists
-        run: python3 scripts/merge.py
-
-      - name: Compile rule-sets
+      # --- PROXY: домены ---
+      - name: Собрать домены для Proxy
         run: |
-          mkdir -p dist
-          sing-box rule-set compile domains.json -o dist/domains.srs
-          sing-box rule-set compile subnets.json -o dist/subnets.srs
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geosite/release/text/ПУТЬ_УТОЧНИТЬ/ru-blocked.lst > d1.lst
+          # Google - парсим v2fly формат, оставляя только строки без спецпрефиксов
+          curl -s https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/google \
+            | grep -v '^#' | grep -v 'include:' | sed 's/^full://; s/^domain://' | awk '{print $1}' > d2.lst
 
-      - name: Commit compiled rule-sets
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f dist/domains.srs dist/subnets.srs
-          git diff --staged --quiet && exit 0
-          git commit -m "Rebuild dist/*.srs [skip ci]"
-          git push
+          cat d1.lst d2.lst custom/proxy-domains.txt 2>/dev/null | sort -u > all-proxy-domains.txt
+          jq -R -s '{version:1, rules:[{domain_suffix: (split("\n") | map(select(length>0)))}]}' all-proxy-domains.txt > merged-proxy.json
 
-      # Роутер качает списки с raw.githubusercontent, а не отсюда: uclient-fetch
-      # в OpenWrt не проходит цепочку редиректов релизных ассетов (см. 6bacfda).
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Compile PROXY
+        run: sing-box rule-set compile merged-proxy.json -o proxy.srs
+
+      # --- BYPASS: РФ-домены и IP аналогично ---
+      - name: Собрать для Bypass
         run: |
-          gh release view latest >/dev/null 2>&1 || gh release create latest \
-            --title "latest" \
-            --notes "Скомпилированные rule-set'ы. Пересобираются автоматически, ассеты перезаписываются на месте."
-          gh release upload latest dist/domains.srs dist/subnets.srs --clobber
-          gh release edit latest --notes "Обновлено: $(date -u '+%Y-%m-%d %H:%M UTC') • $(git rev-parse --short HEAD)"
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked/ipresolve.lst > ip1.lst
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked/subnet.lst > ip2.lst
+          cat ip1.lst ip2.lst custom/bypass-ips.txt 2>/dev/null | sort -u > all-bypass-ips.txt
+          jq -R -s '{version:1, rules:[{ip_cidr: (split("\n") | map(select(length>0)))}]}' all-bypass-ips.txt > merged-bypass.json
+
+      - name: Compile BYPASS
+        run: sing-box rule-set compile merged-bypass.json -o bypass.srs
+
+      - name: Publish
+        run: |
+          git checkout --orphan release
+          git rm -rf . 2>/dev/null || true
+          cp proxy.srs bypass.srs .
+          git add proxy.srs bypass.srs
+          git -c user.name="bot" -c user.email="bot@local" commit -m "Auto-build $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push origin release --force
