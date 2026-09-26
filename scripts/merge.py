@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Скачивает enabled-списки itdoginfo + отдельные экстра-источники, декомпилирует
-через sing-box, сливает с data/own_domains.lst и data/own_subnets.lst,
-пишет итог в domains.json / subnets.json (source-формат для sing-box compile).
+через sing-box, сливает с data/own_*.lst, пишет source-JSON для sing-box compile.
+
+Собирает ДВЕ независимые пары списков:
+- domains.json / subnets.json         -> Proxy (через VPN)
+- russia-domains.json / russia-subnets.json -> Bypass (напрямую)
 
 Подсети перед записью схлопываются: podkop добавляет каждую строку subnets.srs
 в nftables-сет podkop_subnets построчно, с форком на строку, так что время
@@ -21,6 +24,30 @@ ITDOG_LISTS = [
 ITDOG_URL = "https://github.com/itdoginfo/allow-domains/releases/latest/download/{}.srs"
 
 DOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')
+
+# ---- PROXY источники (как было) ----
+DOMAIN_ONLY_EXTRA_URLS = [
+    "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/spotify.srs",
+    "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
+]
+SUBNET_ONLY_EXTRA_URLS = [
+    "https://raw.githubusercontent.com/mudachyo/IP-Ranger/main/ip-lists/ALL-IN-ONE/all-in-one.srs",
+]
+
+# ---- RUSSIA-DIRECT источники (новое) ----
+RU_DOMAIN_SRS_URLS = [
+    "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geosite/release/sing-box/category-ru.srs",
+]
+RU_SUBNET_SRS_URLS = [
+    "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/srs/ru.srs",
+]
+# plain-text источник (не .srs, читаем как обычный список IP/подсетей)
+RU_SUBNET_TEXT_URLS = [
+    "https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru.txt",
+]
+# whitelist-исключения: убираются из RU-подсетей, чтобы не блокировать
+# то, что явно помечено как "не трогать"
+RU_SUBNET_WHITELIST_URL = "https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-whitelist.txt"
 
 
 def read_own_domains(path):
@@ -51,16 +78,6 @@ def read_own_subnets(path):
         except ValueError:
             print(f"::warning::{path}:{n}: пропущена некорректная строка: {line.strip()}")
     return out
-    
-# домены — сюда можно тащить сколько угодно, ограничений нет
-DOMAIN_ONLY_EXTRA_URLS = [
-    "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/spotify.srs",
-    "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
-]
-
-SUBNET_ONLY_EXTRA_URLS = [
-    "https://raw.githubusercontent.com/mudachyo/IP-Ranger/main/ip-lists/ALL-IN-ONE/all-in-one.srs",
-]
 
 
 def source_label(url):
@@ -70,6 +87,11 @@ def source_label(url):
 
 def fetch(url, dest):
     urllib.request.urlretrieve(url, dest)
+
+
+def fetch_text_lines(url):
+    req = urllib.request.urlopen(url)
+    return {ln.decode().split("#", 1)[0].strip() for ln in req if ln.decode().split("#", 1)[0].strip()}
 
 
 def decompile(srs_path, json_path):
@@ -95,12 +117,11 @@ def extract_subnets(json_path):
                 ipaddress.ip_network(c, strict=False)
                 found.add(c)
             except ValueError:
-                pass  # битые фрагменты в апстриме — пропускаем
+                pass
     return found
 
 
 def merge(label, found, target, report):
-    """Складывает найденное в target и запоминает вклад источника."""
     new = found - target
     target |= found
     report.append((label, len(found), len(new), len(found) - len(new)))
@@ -116,8 +137,6 @@ def print_report(title, report, total):
 
 
 def drop_covered_subdomains(domains):
-    """Убирает поддомены, уже покрытые родительским доменом: при сопоставлении
-    по суффиксу example.com и так матчит sub.example.com."""
     kept = set()
     for d in domains:
         parts = d.split(".")
@@ -136,7 +155,7 @@ def collapse(subnets):
     return set(out)
 
 
-def main():
+def build_proxy_lists():
     domains, subnets = set(), set()
     domain_report, subnet_report = [], []
 
@@ -164,24 +183,69 @@ def main():
     merge("data/own_subnets.lst", read_own_subnets("data/own_subnets.lst"),
           subnets, subnet_report)
 
-    print_report("ДОМЕНЫ", domain_report, len(domains))
-    before_subdomains = len(domains)
+    print_report("PROXY: ДОМЕНЫ", domain_report, len(domains))
     domains = drop_covered_subdomains(domains)
-    print(f"  свёрнуто поддоменов (покрыты родительским): "
-          f"{before_subdomains - len(domains)} -> остаётся {len(domains)}")
-
-    print_report("ПОДСЕТИ", subnet_report, len(subnets))
-    before_collapse = len(subnets)
+    print_report("PROXY: ПОДСЕТИ", subnet_report, len(subnets))
     subnets = collapse(subnets)
-    print(f"  схлопнуто смежных/вложенных: {before_collapse - len(subnets)} "
-          f"-> остаётся {len(subnets)}")
-
-    print(f"\nитого: {len(domains)} доменов, {len(subnets)} подсетей")
+    print(f"PROXY итого: {len(domains)} доменов, {len(subnets)} подсетей")
 
     json.dump({"version": 3, "rules": [{"domain_suffix": sorted(domains)}]},
               open("domains.json", "w"))
     json.dump({"version": 3, "rules": [{"ip_cidr": sorted(subnets, key=lambda x: (":" in x, x))}]},
               open("subnets.json", "w"))
+
+
+def build_russia_lists():
+    domains, subnets = set(), set()
+    domain_report, subnet_report = [], []
+
+    for i, url in enumerate(RU_DOMAIN_SRS_URLS):
+        srs, js = f"/tmp/rudextra{i}.srs", f"/tmp/rudextra{i}.json"
+        fetch(url, srs)
+        decompile(srs, js)
+        merge(source_label(url), extract_domains(js), domains, domain_report)
+
+    for i, url in enumerate(RU_SUBNET_SRS_URLS):
+        srs, js = f"/tmp/rusextra{i}.srs", f"/tmp/rusextra{i}.json"
+        fetch(url, srs)
+        decompile(srs, js)
+        merge(source_label(url), extract_subnets(js), subnets, subnet_report)
+
+    for url in RU_SUBNET_TEXT_URLS:
+        found = set()
+        for line in fetch_text_lines(url):
+            try:
+                found.add(str(ipaddress.ip_network(line, strict=False)))
+            except ValueError:
+                pass
+        merge(source_label(url), found, subnets, subnet_report)
+
+    # вычитаем whitelist-исключения
+    whitelist = fetch_text_lines(RU_SUBNET_WHITELIST_URL)
+    before = len(subnets)
+    subnets -= whitelist
+    print(f"  whitelist исключил: {before - len(subnets)} подсетей")
+
+    merge("data/own_ru_domains.lst", read_own_domains("data/own_ru_domains.lst"),
+          domains, domain_report)
+    merge("data/own_ru_subnets.lst", read_own_subnets("data/own_ru_subnets.lst"),
+          subnets, subnet_report)
+
+    print_report("RUSSIA: ДОМЕНЫ", domain_report, len(domains))
+    domains = drop_covered_subdomains(domains)
+    print_report("RUSSIA: ПОДСЕТИ", subnet_report, len(subnets))
+    subnets = collapse(subnets)
+    print(f"RUSSIA итого: {len(domains)} доменов, {len(subnets)} подсетей")
+
+    json.dump({"version": 3, "rules": [{"domain_suffix": sorted(domains)}]},
+              open("russia-domains.json", "w"))
+    json.dump({"version": 3, "rules": [{"ip_cidr": sorted(subnets, key=lambda x: (":" in x, x))}]},
+              open("russia-subnets.json", "w"))
+
+
+def main():
+    build_proxy_lists()
+    build_russia_lists()
 
 
 if __name__ == "__main__":
