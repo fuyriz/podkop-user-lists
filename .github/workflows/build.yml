@@ -1,52 +1,19 @@
-name: Build merged rule-sets
-
-on:
-  schedule:
-    - cron: "0 */6 * * *"
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install sing-box (только для финальной компиляции)
+      - name: Собрать GeoIP для Proxy (заблокированные)
         run: |
-          curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-linux-amd64.tar.gz
-          tar -xzf sing-box.tar.gz
-          sudo mv sing-box-1.14.0-linux-amd64/sing-box /usr/local/bin/
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked.txt > ip1.lst
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked-community.txt > ip2.lst
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/re-filter.txt > ip3.lst
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/re.txt > ip4.lst
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-whitelist.txt > whitelist.lst
 
-      # --- PROXY: домены ---
-      - name: Собрать домены для Proxy
+          cat ip1.lst ip2.lst ip3.lst ip4.lst custom/proxy-ips.txt 2>/dev/null | sort -u > raw-proxy-ips.txt
+          # вычитаем whitelist - убираем из proxy-списка всё, что там перечислено как исключение
+          grep -v -F -x -f whitelist.lst raw-proxy-ips.txt > all-proxy-ips.txt
+
+          jq -R -s '{version:1, rules:[{ip_cidr: (split("\n") | map(select(length>0)))}]}' all-proxy-ips.txt > merged-proxy-ip.json
+
+      - name: Собрать GeoIP для Bypass (вся РФ)
         run: |
-          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geosite/release/text/ПУТЬ_УТОЧНИТЬ/ru-blocked.lst > d1.lst
-          # Google - парсим v2fly формат, оставляя только строки без спецпрефиксов
-          curl -s https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/google \
-            | grep -v '^#' | grep -v 'include:' | sed 's/^full://; s/^domain://' | awk '{print $1}' > d2.lst
-
-          cat d1.lst d2.lst custom/proxy-domains.txt 2>/dev/null | sort -u > all-proxy-domains.txt
-          jq -R -s '{version:1, rules:[{domain_suffix: (split("\n") | map(select(length>0)))}]}' all-proxy-domains.txt > merged-proxy.json
-
-      - name: Compile PROXY
-        run: sing-box rule-set compile merged-proxy.json -o proxy.srs
-
-      # --- BYPASS: РФ-домены и IP аналогично ---
-      - name: Собрать для Bypass
-        run: |
-          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked/ipresolve.lst > ip1.lst
-          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru-blocked/subnet.lst > ip2.lst
-          cat ip1.lst ip2.lst custom/bypass-ips.txt 2>/dev/null | sort -u > all-bypass-ips.txt
-          jq -R -s '{version:1, rules:[{ip_cidr: (split("\n") | map(select(length>0)))}]}' all-bypass-ips.txt > merged-bypass.json
-
-      - name: Compile BYPASS
-        run: sing-box rule-set compile merged-bypass.json -o bypass.srs
-
-      - name: Publish
-        run: |
-          git checkout --orphan release
-          git rm -rf . 2>/dev/null || true
-          cp proxy.srs bypass.srs .
-          git add proxy.srs bypass.srs
-          git -c user.name="bot" -c user.email="bot@local" commit -m "Auto-build $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push origin release --force
+          curl -s https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/text/ru.txt > ru-all.lst
+          cat ru-all.lst custom/bypass-ips.txt 2>/dev/null | sort -u > all-bypass-ips.txt
+          jq -R -s '{version:1, rules:[{ip_cidr: (split("\n") | map(select(length>0)))}]}' all-bypass-ips.txt > merged-bypass-ip.json
