@@ -33,3 +33,14 @@
 ## Использование в Podkop
 
 Роутеры на OpenWrt должны брать файлы напрямую из `master`, а не из Release — `uclient-fetch` не проходит цепочку редиректов, через которую GitHub отдаёт файлы релизов:
+
+## Тип подключения - Connection
+
+https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/domains.srs
+https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/subnets.srs
+
+## Тип подключения - Bypass
+
+https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/russia-domains.srs
+https://raw.githubusercontent.com/fuyriz/podkop-user-lists/master/dist/russia-subnets.srs
+
